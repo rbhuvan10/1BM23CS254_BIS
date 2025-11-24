@@ -1,0 +1,97 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+
+coords = np.array([
+    [0, 0],
+    [3, 5],
+    [6, 4],
+    [8, 1],
+    [4, 0],
+    [2, 2]
+])
+
+def distance_matrix(coords):
+    n = len(coords)
+    dist = np.zeros((n, n))
+    for i in range(n):
+        for j in range(n):
+            dist[i, j] = np.linalg.norm(coords[i] - coords[j])
+    return dist
+
+dist_matrix = distance_matrix(coords)
+
+class ACO:
+    def __init__(self, dist, ants=20, iterations=30, alpha=1, beta=5, evap=0.5, Q=100):
+        self.dist = dist
+        self.n = len(dist)
+        self.pher = np.ones((self.n, self.n))
+        self.ants = ants
+        self.iter = iterations
+        self.alpha = alpha
+        self.beta = beta
+        self.evap = evap
+        self.Q = Q
+        self.best_cost = float("inf")
+        self.best_route = None
+
+    def run(self):
+        for it in range(self.iter):
+            routes = []
+            costs = []
+            for _ in range(self.ants):
+                r = self.build_route()
+                c = self.cost(r)
+                routes.append(r)
+                costs.append(c)
+                if c < self.best_cost:
+                    self.best_cost = c
+                    self.best_route = r
+
+            self.update(routes, costs)
+            print(f"Iteration {it + 1} | Best Cost: {self.best_cost:.2f}")
+
+    def build_route(self):
+        route = [random.randrange(self.n)]
+        while len(route) < self.n:
+            current = route[-1]
+            probs = self.probabilities(current, route)
+            route.append(np.random.choice(self.n, p=probs))
+        return route
+
+    def probabilities(self, current, visited):
+        p = np.zeros(self.n)
+        for j in range(self.n):
+            if j not in visited:
+                p[j] = (self.pher[current, j]**self.alpha) * (1 / (self.dist[current, j] + 1e-10))**self.beta
+        return p / p.sum()
+
+    def cost(self, route):
+        return sum(self.dist[route[i], route[(i+1) % self.n]] for i in range(self.n))
+
+    def update(self, routes, costs):
+        self.pher *= (1 - self.evap)
+        for r, c in zip(routes, costs):
+            for i in range(self.n):
+                a, b = r[i], r[(i+1) % self.n]
+                self.pher[a, b] += self.Q / c
+
+aco = ACO(dist_matrix)
+aco.run()
+
+best_route = aco.best_route + [aco.best_route[0]]
+
+plt.figure(figsize=(7, 5))
+plt.scatter(coords[:, 0], coords[:, 1], s=80, c="blue")
+
+for i in range(len(best_route) - 1):
+    a, b = best_route[i], best_route[i+1]
+    plt.plot([coords[a, 0], coords[b, 0]],
+             [coords[a, 1], coords[b, 1]], "r-", linewidth=2)
+
+for i, (x, y) in enumerate(coords):
+    plt.text(x + 0.1, y + 0.1, f"J{i+1}")
+
+plt.title(f"Optimized Route\nTotal Cost: {aco.best_cost:.2f}")
+plt.grid(True)
+plt.show()
