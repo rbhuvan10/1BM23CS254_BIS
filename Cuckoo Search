@@ -1,0 +1,58 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+
+def power_consumption(x):
+    return np.sum(0.8 * x**2 + 2*np.sin(x) + 10)
+
+n = 20
+max_iter = 30
+pa = 0.25
+lb, ub = -10, 10
+
+nests = np.random.uniform(lb, ub, (n, 5))
+fitness = np.array([power_consumption(x) for x in nests])
+
+def get_best(nests, fitness):
+    idx = np.argmin(fitness)
+    return nests[idx], fitness[idx]
+
+best_nest, best_power = get_best(nests, fitness)
+power_history = []
+
+for t in range(max_iter):
+    new_nests = np.copy(nests)
+    for i in range(n):
+        step = np.random.randn(*nests[i].shape)
+        new_nests[i] = nests[i] + 0.01 * step * (nests[i] - best_nest)
+        new_nests[i] = np.clip(new_nests[i], lb, ub)
+
+    new_fitness = np.array([power_consumption(x) for x in new_nests])
+
+    for i in range(n):
+        if new_fitness[i] < fitness[i]:
+            fitness[i] = new_fitness[i]
+            nests[i] = new_nests[i]
+
+    abandon_mask = np.random.rand(n, 5) < pa
+    stepsize = np.random.rand() * (nests[np.random.permutation(n)] - nests[np.random.permutation(n)])
+    nests = nests + stepsize * abandon_mask
+    nests = np.clip(nests, lb, ub)
+
+    fitness = np.array([power_consumption(x) for x in nests])
+    best_nest, best_power = get_best(nests, fitness)
+    power_history.append(best_power)
+
+    print(f"Iteration {t+1} : Power (MW) : {best_power:.4f}")
+
+optimal_power = np.round(best_power, 4)
+print("Optimization Complete")
+print(f"Minimum Power used (Best fitness): {optimal_power} MW")
+
+plt.plot(range(1, max_iter+1), power_history, marker='o', color='orange')
+plt.title("Cuckoo Search Optimization - Minimum Power Usage (MW)")
+plt.xlabel("Iteration")
+plt.ylabel("Power (MW)")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
