@@ -1,0 +1,188 @@
+import cv2
+import numpy as np
+import random
+from copy import deepcopy
+
+IMAGE_PATH = "image.jpg"
+GRID_ROWS = 10
+GRID_COLS = 10
+N_ITER = 100
+MUTATION_RATE = 0.3
+SEED = 42
+
+LOW_MIN, LOW_MAX = 10.0, 150.0
+HIGH_MIN, HIGH_MAX = 50.0, 300.0
+DIL_MIN, DIL_MAX = 0.0, 6.0
+MIN_CONTOUR_AREA = 100.0
+
+random.seed(SEED)
+np.random.seed(SEED)
+
+def load_image_gray(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot load image: {path}")
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return img, gray
+
+def eval_params_on_image(gray, params):
+    low, high, dilf = params
+    low = float(np.clip(low, LOW_MIN, LOW_MAX))
+    high = float(np.clip(high, HIGH_MIN, HIGH_MAX))
+    if high <= low + 1.0:
+        high = min(HIGH_MAX, low + 1.0)
+    dil_iter = int(round(np.clip(dilf, DIL_MIN, DIL_MAX)))
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    edges = cv2.Canny(blur, int(low), int(high))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    deep_edges = cv2.dilate(edges, kernel, iterations=dil_iter)
+    cnts = cv2.findContours(deep_edges.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = cnts[0] if len(cnts) == 2 else cnts[1]
+    total_area = 0.0
+    valid = []
+    for c in contours:
+        a = cv2.contourArea(c)
+        if a >= MIN_CONTOUR_AREA:
+            total_area += a
+            valid.append(c)
+    return total_area, edges, deep_edges, valid
+
+def random_params():
+    low = random.uniform(LOW_MIN, LOW_MAX)
+    high = random.uniform(HIGH_MIN, HIGH_MAX)
+    dil = random.uniform(DIL_MIN, DIL_MAX)
+    return [low, high, dil]
+
+def neighbors_indices(r, c, rows, cols):
+    neigh = []
+    for dr in (-1, 0, 1):
+        for dc in (-1, 0, 1):
+            if dr == 0 and dc == 0:
+                continue
+            nr = (r + dr) % rows
+            nc = (c + dc) % cols
+            neigh.append((nr, nc))
+    return neigh
+
+def local_mutation(params):
+    p = params[:]
+    if random.random() < MUTATION_RATE:
+        p[0] += random.gauss(0, 8.0)
+    if random.random() < MUTATION_RATE:
+        p[1] += random.gauss(0, 12.0)
+    if random.random() < MUTATION_RATE:
+        p[2] += random.gauss(0, 1.2)
+    p[0] = float(np.clip(p[0], LOW_MIN, LOW_MAX))
+    p[1] = float(np.clip(p[1], HIGH_MIN, HIGH_MAX))
+    p[2] = float(np.clip(p[2], DIL_MIN, DIL_MAX))
+    if p[1] <= p[0] + 1.0:
+        p[1] = min(HIGH_MAX, p[0] + 1.0)
+    return p
+
+def parallel_cellular_image_processing(image_path):
+    img_color, img_gray = load_image_gray(image_path)
+
+    grid = [[random_params() for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+    grid_scores = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+    grid_edges = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+    grid_deep = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+    grid_contours = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+
+    global_best_params = None
+    global_best_score = -float("inf")
+
+    for i in range(GRID_ROWS):
+        for j in range(GRID_COLS):
+            score, edges, deep_edges, conts = eval_params_on_image(img_gray, grid[i][j])
+            grid_scores[i][j] = score
+            grid_edges[i][j] = edges
+            grid_deep[i][j] = deep_edges
+            grid_contours[i][j] = conts
+            if score > global_best_score:
+                global_best_score = score
+                global_best_params = deepcopy(grid[i][j])
+
+    for it in range(1, N_ITER + 1):
+        new_grid = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+        new_scores = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+        new_edges = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+        new_deep = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+        new_contours = [[None for _ in range(GRID_COLS)] for _ in range(GRID_ROWS)]
+
+        for r in range(GRID_ROWS):
+            for c in range(GRID_COLS):
+                best_local_params = grid[r][c]
+                best_local_score = grid_scores[r][c]
+
+                for nr, nc in neighbors_indices(r, c, GRID_ROWS, GRID_COLS):
+                    if grid_scores[nr][nc] > best_local_score:
+                        best_local_score = grid_scores[nr][nc]
+                        best_local_params = grid[nr][nc]
+
+                child_params = local_mutation(best_local_params)
+                child_score, child_edges, child_deep, child_conts = eval_params_on_image(img_gray, child_params)
+
+                if child_score > best_local_score:
+                    new_grid[r][c] = child_params
+                    new_scores[r][c] = child_score
+                    new_edges[r][c] = child_edges
+                    new_deep[r][c] = child_deep
+                    new_contours[r][c] = child_conts
+                else:
+                    new_grid[r][c] = best_local_params[:]
+                    new_scores[r][c] = best_local_score
+                    new_edges[r][c] = grid_edges[r][c]
+                    new_deep[r][c] = grid_deep[r][c]
+                    new_contours[r][c] = grid_contours[r][c]
+
+                if new_scores[r][c] > global_best_score:
+                    global_best_score = new_scores[r][c]
+                    global_best_params = deepcopy(new_grid[r][c])
+
+        grid = new_grid
+        grid_scores = new_scores
+        grid_edges = new_edges
+        grid_deep = new_deep
+        grid_contours = new_contours
+
+        print(f"Iteration {it} best fitness: {round(global_best_score, 4)}")
+
+    best_score, best_edges, best_deep, best_contours = eval_params_on_image(img_gray, global_best_params)
+    return {
+        "best_params": global_best_params,
+        "best_score": best_score,
+        "best_edges": best_edges,
+        "best_deep": best_deep,
+        "best_contours": best_contours,
+        "img_color": img_color
+    }
+
+if __name__ == "__main__":
+    result = parallel_cellular_image_processing(IMAGE_PATH)
+    bp = result["best_params"]
+    bs = result["best_score"]
+    be = result["best_edges"]
+    bd = result["best_deep"]
+    bcont = result["best_contours"]
+    img_color = result["img_color"]
+
+    print("\nFinal best parameters:")
+    print(f"low_thresh: {bp[0]:.2f}, high_thresh: {bp[1]:.2f}, dilation_iters: {int(round(bp[2]))}")
+    print(f"Final best fitness: {bs:.4f}")
+
+    boxed = img_color.copy()
+    for i, c in enumerate(bcont):
+        x, y, w, h = cv2.boundingRect(c)
+        cv2.rectangle(boxed, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        cv2.putText(boxed, f"Obj {i+1}", (x, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+    deep_overlay = img_color.copy()
+    mask = bd > 0
+    deep_overlay[mask] = [255, 255, 255]
+
+    cv2.imwrite("pc_best_edges.png", be)
+    cv2.imwrite("pc_best_deep.png", bd)
+    cv2.imwrite("pc_identified_boxes.png", boxed)
+    cv2.imwrite("pc_deep_overlay.png", deep_overlay)
+
+    print("\nSaved: pc_best_edges.png, pc_best_deep.png, pc_identified_boxes.png, pc_deep_overlay.png")
