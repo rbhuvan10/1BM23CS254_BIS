@@ -1,0 +1,64 @@
+import random, math
+
+POP=50
+GEN=60
+CHROM_LEN=20
+FUNCTIONS=['+','-','*','/','sin','cos']
+TERMINALS=['x']
+ALL=FUNCTIONS+TERMINALS
+
+def random_gene():
+    return random.choice(ALL)
+
+def valid_expression(expr,x):
+    try:
+        e=expr.replace('x',str(x))
+        e=e.replace('/', '/(1e-6+')
+        return eval(e)
+    except:
+        return 0
+
+def fitness(expr,data):
+    err=0
+    for x,y in data:
+        err+=abs(valid_expression(expr,x)-y)
+    return -err
+
+def mutate(expr):
+    i=random.randrange(len(expr))
+    return expr[:i]+random_gene()+expr[i+1:]
+
+def crossover(a,b):
+    i=random.randrange(1,len(a)-1)
+    return a[:i]+b[i:], b[:i]+a[i:]
+
+def random_expr():
+    return ''.join(random_gene() for _ in range(CHROM_LEN))
+
+def GEP(data):
+    pop=[random_expr() for _ in range(POP)]
+    for _ in range(GEN):
+        fits=[fitness(e,data) for e in pop]
+        new=[]
+        elites=sorted(range(len(fits)), key=lambda i: fits[i], reverse=True)[:2]
+        for i in elites:
+            new.append(pop[i])
+        while len(new)<POP:
+            p1=random.choice(pop)
+            p2=random.choice(pop)
+            if random.random()<0.7:
+                c1,c2=crossover(p1,p2)
+            else:
+                c1,c2=p1,p2
+            if random.random()<0.3: c1=mutate(c1)
+            if random.random()<0.3: c2=mutate(c2)
+            new+= [c1,c2]
+        pop=new[:POP]
+    fits=[fitness(e,data) for e in pop]
+    return pop[fits.index(max(fits))]
+
+data=[(x,x*x+2*x+1) for x in range(-5,6)]
+best=GEP(data)
+print("Best:",best)
+for x,y in data:
+    print(x,y,valid_expression(best,x))
