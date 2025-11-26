@@ -1,0 +1,92 @@
+
+import cv2
+import numpy as np
+import random
+from google.colab import files
+
+
+print("Please upload your image (click the Choose Files button)...")
+uploaded = files.upload()
+if len(uploaded) == 0:
+    raise SystemExit("No file uploaded. Re-run the cell and upload an image file (jpg/png).")
+
+image_path = list(uploaded.keys())[0]
+
+POPULATION = 20
+MAX_ITER = 30
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+
+LOW_MIN, LOW_MAX = 10.0, 150.0
+HIGH_MIN, HIGH_MAX = 50.0, 300.0
+DIL_MIN, DIL_MAX = 0.0, 6.0
+MIN_CONTOUR_AREA = 100.0
+
+def load_image_gray(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot load image: {path}")
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return img, gray
+
+def eval_params_on_image(gray, params):
+    low, high, dilf = params
+    low = float(np.clip(low, LOW_MIN, LOW_MAX))
+    high = float(np.clip(high, HIGH_MIN, HIGH_MAX))
+    if high <= low + 1.0:
+        high = min(HIGH_MAX, low + 1.0)
+    dil_iter = int(round(np.clip(dilf, DIL_MIN, DIL_MAX)))
+    blur = cv2.GaussianBlur(gray, (5,5), 0)
+    edges = cv2.Canny(blur, low, high)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    deep_edges = cv2.dilate(edges, kernel, iterations=dil_iter)
+    # handle findContours return (OpenCV 3 vs 4)
+    cnts = cv2.findContours(deep_edges.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = cnts[0] if len(cnts) == 2 else cnts[1]
+    total_area = 0.0
+    for c in contours:
+        a = cv2.contourArea(c)
+        if a >= MIN_CONTOUR_AREA:
+            total_area += a
+    return total_area
+
+def initialize_wolves(n):
+    wolves = []
+    for _ in range(n):
+        low = random.uniform(LOW_MIN, LOW_MAX)
+        high = random.uniform(HIGH_MIN, HIGH_MAX)
+        dil = random.uniform(DIL_MIN, DIL_MAX)
+        wolves.append(np.array([low, high, dil], dtype=float))
+    return wolves
+
+def gwo_optimize(gray, pop=POPULATION, iterations=MAX_ITER):
+    wolves = initialize_wolves(pop)
+    fitnesses = [eval_params_on_image(gray, w) for w in wolves]
+    idx = sorted(range(len(wolves)), key=lambda i: fitnesses[i], reverse=True)
+    alpha, beta, delta = wolves[idx[0]].copy(), wolves[idx[1]].copy(), wolves[idx[2]].copy()
+    for t in range(iterations):
+        a = 2.0 * (1.0 - (t / float(iterations)))
+        for i in range(len(wolves)):
+            X = wolves[i].copy()
+            for leader in (alpha, beta, delta):
+                r1, r2 = random.random(), random.random()
+                A = 2.0 * a * r1 - a
+                C = 2.0 * r2
+                D = np.abs(C * leader - X)
+                X = leader - A * D
+            X[0] = np.clip(X[0], LOW_MIN, LOW_MAX)
+            X[1] = np.clip(X[1], HIGH_MIN, HIGH_MAX)
+            X[2] = np.clip(X[2], DIL_MIN, DIL_MAX)
+            wolves[i] = X
+        fitnesses = [eval_params_on_image(gray, w) for w in wolves]
+        idx = sorted(range(len(wolves)), key=lambda i: fitnesses[i], reverse=True)
+        alpha = wolves[idx[0]].copy()
+        alpha_score = fitnesses[idx[0]]
+        beta = wolves[idx[1]].copy()
+        delta = wolves[idx[2]].copy()
+        print(f"Iteration {t+1} best fitness: {alpha_score:.2f}")
+    return alpha, alpha_score
+
+img_color, img_gray = load_image_gray(image_path)
+best_params, best_score = gwo_optimize(img_gray)
