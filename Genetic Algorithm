@@ -1,0 +1,104 @@
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+
+RANDOM_SEED = 42
+random.seed(RANDOM_SEED)
+np.random.seed(RANDOM_SEED)
+
+CYCLE_MIN = 30.0
+CYCLE_MAX = 120.0
+NS_GREEN_MIN = 5.0
+
+POP_SIZE = 60
+GENERATIONS = 50
+TOURNAMENT_K = 3
+ELITISM = 2
+CROSSOVER_RATE = 0.9
+MUTATION_RATE = 0.25
+MUTATION_STD_CYCLE = 4.0
+MUTATION_STD_NS = 3.0
+
+TARGET_DELAY = 50.0
+
+def compute_delay(cycle, ns_green):
+    cycle = float(np.clip(cycle, CYCLE_MIN, CYCLE_MAX))
+    ns_green = float(np.clip(ns_green, NS_GREEN_MIN, cycle - NS_GREEN_MIN))
+    ns_ratio = ns_green / cycle
+    base = TARGET_DELAY
+    cycle_penalty = 0.35 * (cycle - 60)
+    balance_penalty = 120 * (ns_ratio - 0.5) ** 2
+    delay = base + cycle_penalty + balance_penalty
+    return max(1.0, delay)
+
+def fitness(ind):
+    d = compute_delay(*ind)
+    return -abs(d - TARGET_DELAY)
+
+def random_individual():
+    cycle = random.uniform(CYCLE_MIN, CYCLE_MAX)
+    ns = random.uniform(NS_GREEN_MIN, cycle - NS_GREEN_MIN)
+    return [cycle, ns]
+
+def ensure_bounds(ind):
+    cycle, ns = ind
+    cycle = float(np.clip(cycle, CYCLE_MIN, CYCLE_MAX))
+    ns = float(np.clip(ns, NS_GREEN_MIN, cycle - NS_GREEN_MIN))
+    return [cycle, ns]
+
+def tournament(pop, fits):
+    choices = random.sample(range(len(pop)), TOURNAMENT_K)
+    best = max(choices, key=lambda i: fits[i])
+    return pop[best][:]
+
+def crossover(p1, p2):
+    if random.random() > CROSSOVER_RATE:
+        return p1[:], p2[:]
+    c1, c2 = p1[:], p2[:]
+    if random.random() < 0.5: c1[0], c2[0] = p2[0], p1[0]
+    if random.random() < 0.5: c1[1], c2[1] = p2[1], p1[1]
+    return c1, c2
+
+def mutate(ind):
+    if random.random() < MUTATION_RATE:
+        ind[0] += random.gauss(0, MUTATION_STD_CYCLE)
+    if random.random() < MUTATION_RATE:
+        ind[1] += random.gauss(0, MUTATION_STD_NS)
+    return ensure_bounds(ind)
+
+def run_ga():
+    pop = [random_individual() for _ in range(POP_SIZE)]
+    best_final = None
+
+    for gen in range(1, GENERATIONS + 1):
+        fits = [fitness(ind) for ind in pop]
+        sorted_idx = sorted(range(len(pop)), key=lambda i: fits[i])
+        sorted_idx.reverse()
+        best = pop[sorted_idx[0]]
+        best_final = best
+        best_delay = compute_delay(*best)
+        print(f"Gen {gen} best avg delay: {best_delay:.2f}")
+
+        new_pop = [pop[i][:] for i in sorted_idx[:ELITISM]]
+
+        while len(new_pop) < POP_SIZE:
+            p1 = tournament(pop, fits)
+            p2 = tournament(pop, fits)
+            c1, c2 = crossover(p1, p2)
+            new_pop.append(mutate(c1))
+            if len(new_pop) < POP_SIZE:
+                new_pop.append(mutate(c2))
+
+        pop = new_pop
+
+    cycle, ns = best_final
+    ew = cycle - ns
+    final_delay = compute_delay(cycle, ns)
+
+    print("\noptimal signal plan:")
+    print(f"cycle length: {cycle:.2f}")
+    print(f"north south green: {ns:.2f}")
+    print(f"east west green: {ew:.2f}")
+    print(f"average delay: {final_delay:.2f}")
+
+run_ga()
