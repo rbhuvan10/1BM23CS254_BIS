@@ -1,0 +1,134 @@
+import cv2
+import numpy as np
+import random
+import math
+from copy import deepcopy
+
+IMAGE_PATH = "image.jpg"
+NUM_PARTICLES = 30
+ITERATIONS = 100
+W = 0.7
+C1 = 1.5
+C2 = 1.5
+
+LOW_MIN, LOW_MAX = 10.0, 150.0
+HIGH_MIN, HIGH_MAX = 50.0, 300.0
+DIL_MIN, DIL_MAX = 0.0, 6.0
+MIN_CONTOUR_AREA = 100.0
+
+random.seed(42)
+np.random.seed(42)
+
+def load_image_gray(path):
+    img = cv2.imread(path)
+    if img is None:
+        raise FileNotFoundError(f"Cannot load image: {path}. Put image file named '{path}' in working directory.")
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    return img, gray
+
+def eval_params_on_image(gray, params):
+    low, high, dilf = params
+    low = float(np.clip(low, LOW_MIN, LOW_MAX))
+    high = float(np.clip(high, HIGH_MIN, HIGH_MAX))
+    if high <= low + 1.0:
+        high = min(HIGH_MAX, low + 1.0)
+    dil_iter = int(round(np.clip(dilf, DIL_MIN, DIL_MAX)))
+    blur = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blur, int(low), int(high))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    deep_edges = cv2.dilate(edges, kernel, iterations=dil_iter)
+    cnts = cv2.findContours(deep_edges.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours = cnts[0] if len(cnts) == 2 else cnts[1]
+    total_area = 0.0
+    valid = []
+    for c in contours:
+        a = cv2.contourArea(c)
+        if a >= MIN_CONTOUR_AREA:
+            total_area += a
+            valid.append(c)
+    return total_area, edges, deep_edges, valid
+
+def init_particles(n):
+    particles = []
+    velocities = []
+    for _ in range(n):
+        low = random.uniform(LOW_MIN, LOW_MAX)
+        high = random.uniform(HIGH_MIN, HIGH_MAX)
+        dil = random.uniform(DIL_MIN, DIL_MAX)
+        particles.append(np.array([low, high, dil], dtype=float))
+        velocities.append(np.array([random.uniform(-1,1), random.uniform(-1,1), random.uniform(-0.5,0.5)], dtype=float))
+    return particles, velocities
+
+def clip_particle(p):
+    p[0] = np.clip(p[0], LOW_MIN, LOW_MAX)
+    p[1] = np.clip(p[1], HIGH_MIN, HIGH_MAX)
+    p[2] = np.clip(p[2], DIL_MIN, DIL_MAX)
+    if p[1] <= p[0] + 1.0:
+        p[1] = min(HIGH_MAX, p[0] + 1.0)
+    return p
+
+def pso_optimize(gray, num_particles=NUM_PARTICLES, iterations=ITERATIONS):
+    particles, velocities = init_particles(num_particles)
+    pbest = [p.copy() for p in particles]
+    pbest_score = [-math.inf] * num_particles
+    gbest = None
+    gbest_score = -math.inf
+
+    for i in range(num_particles):
+        score, _, _, _ = eval_params_on_image(gray, particles[i])
+        pbest_score[i] = score
+        if score > gbest_score:
+            gbest_score = score
+            gbest = particles[i].copy()
+
+    for t in range(1, iterations+1):
+        for i in range(num_particles):
+            r1 = random.random()
+            r2 = random.random()
+            velocities[i] = (W * velocities[i] +
+                             C1 * r1 * (pbest[i] - particles[i]) +
+                             C2 * r2 * (gbest - particles[i]))
+            particles[i] = particles[i] + velocities[i]
+            particles[i] = clip_particle(particles[i])
+
+            score, _, _, _ = eval_params_on_image(gray, particles[i])
+
+            if score > pbest_score[i]:
+                pbest_score[i] = score
+                pbest[i] = particles[i].copy()
+                if score > gbest_score:
+                    gbest_score = score
+                    gbest = particles[i].copy()
+
+        print(f"Iteration {t} best fitness: {round(gbest_score,4)}")
+
+    best_area, best_edges, best_deep, best_contours = eval_params_on_image(gray, gbest)
+    return gbest, best_area, best_edges, best_deep, best_contours
+
+if __name__ == "__main__":
+    img_color, img_gray = load_image_gray(IMAGE_PATH)
+    best_params, best_score, best_edges, best_deep, best_contours = pso_optimize(img_gray, NUM_PARTICLES, ITERATIONS)
+
+    low, high, dil = best_params
+    print("\nBest parameters found:")
+    print(f"low threshold: {low:.2f}")
+    print(f"high threshold: {high:.2f}")
+    print(f"dilation iterations: {int(round(dil))}")
+    print(f"best fitness (total contour area): {round(best_score,4)}")
+
+    boxed = img_color.copy()
+    for i, c in enumerate(best_contours):
+        x, y, w, h = cv2.boundingRect(c)
+        cv2.rectangle(boxed, (x,y), (x+w, y+h), (0,255,0), 2)
+        cv2.putText(boxed, f"Obj {i+1}", (x, y-6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
+
+    deep_overlay = img_color.copy()
+    mask = best_deep > 0
+    deep_overlay[mask] = [255,255,255]
+
+    cv2.imwrite("pso_best_edges.png", best_edges)
+    cv2.imwrite("pso_best_deep.png", best_deep)
+    cv2.imwrite("pso_identified_boxes.png", boxed)
+    cv2.imwrite("pso_deep_overlay.png", deep_overlay)
+
+    print("\nSaved: pso_best_edges.png, pso_best_deep.png, pso_identified_boxes.png, pso_deep_overlay.png")
